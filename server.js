@@ -21,10 +21,12 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-// --- CORS CONFIGURATION ---
+// --- CORS CONFIGURATION (CRUCIAL FIX) ---
+// We explicitly allow your frontend URL to send requests.
 const corsOptions = {
   origin: 'https://cv-dshf.vercel.app', // Your frontend URL
-  optionsSuccessStatus: 200
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 };
 app.use(cors(corsOptions));
 
@@ -32,7 +34,8 @@ app.use(cors(corsOptions));
 app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage() }); // Store files in memory
 
-// --- HELPER FUNCTIONS ---
+// --- HELPER FUNCTIONS (getTextFromImage, getTextFromPdf, analyzeCvText) ---
+// These functions remain the same.
 async function getTextFromImage(buffer, mimeType) {
     try {
         const imagePart = { inlineData: { data: buffer.toString("base64"), mimeType } };
@@ -49,8 +52,6 @@ async function getTextFromPdf(buffer) {
 }
 
 async function analyzeCvText(cvText, keywords) {
-    // --- MODIFIED PROMPT ---
-    // The prompt is now dynamic and smarter. It uses the user's keywords as job requirements.
     const prompt = `You are an expert HR specialist. Your task is to analyze the provided CV text against the required job skills and qualifications.
 
 Job Requirements (Keywords): "${keywords}"
@@ -121,6 +122,7 @@ app.get('/api/results/:id', async (req, res) => {
         return res.status(404).json({ status: 'error', message: 'Submission not found.' });
     }
     
+    // Check if the processing is complete by seeing if cv_results has items
     if (submission.cv_results.length === 0) {
         return res.status(202).json({ status: 'processing', message: 'Analysis is still in progress.' });
     }
@@ -139,6 +141,11 @@ app.get('/api/results/:id', async (req, res) => {
     res.status(200).json(responseData);
 });
 
+// Add a root route for debugging
+app.get('/', (req, res) => {
+    res.status(200).send('Backend is running!');
+});
+
 
 // --- BACKGROUND PROCESSING FUNCTION ---
 async function processFiles(files, submission_id, keywords) {
@@ -151,13 +158,11 @@ async function processFiles(files, submission_id, keywords) {
         }
 
         if (extracted_text) {
-            // Pass keywords to the analysis function
             const analysis_result = await analyzeCvText(extracted_text, keywords);
             
             if (analysis_result) {
                 const score = parseInt(analysis_result.ATS) || 0;
 
-                // --- CONDITIONAL LOGIC ---
                 // First, always insert the main result for the dashboard
                 const { data: cvResultData, error: cvError } = await supabase
                     .from('cv_results')
@@ -173,7 +178,7 @@ async function processFiles(files, submission_id, keywords) {
                     .select()
                     .single();
                 
-                if (cvError || !cvResultData) continue; // Skip if main insertion fails
+                if (cvError || !cvResultData) continue;
 
                 // ONLY if the score is "Very Good" or "Excellent" (> 65), save the detailed data
                 if (score > 65) {
