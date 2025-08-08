@@ -71,12 +71,11 @@ async function getTextFromPdf(buffer) {
  * @returns {Promise<object|null>} The structured data or null on failure.
  */
 async function analyzeCvText(cvText) {
-    const prompt = `You are an HR expert. Based on the following CV text, provide a JSON object with the following structure. Do not include any text outside of the JSON object itself.\n\nCV Text:\n${cvText}\n\nJSON Structure:\n{\n  "ATS": "Calculate a percentage score here",\n  "Name": "Extract the full name",\n  "Phone": "Extract the phone number",\n  "Mail": "Extract the email",\n  "Edu": ["List educational degrees"],\n  "SKILLS": [["Skill Category 1", "Details"], ["Skill Category 2", "Details"]],\n  "EXPERIENCE": ["List key experiences or job titles"]\n}`;
+    const prompt = `You are an HR expert. Based on the following CV text, provide a JSON object with the following structure. Do not include any text outside of the JSON object itself.\n\nCV Text:\n${cvText}\n\nJSON Structure:\n{\n  "ATS": "Calculate a percentage score here",\n  "Name": "Extract the full name",\n  "Phone": "Extract the phone number",\n  "Mail": "Extract the email",\n  "Edu": ["List educational degrees as an array of strings"],\n  "SKILLS": [["Skill Category 1", "Details as a string"], ["Skill Category 2", "Details as a string"]],\n  "EXPERIENCE": ["List key experiences or job titles as an array of strings"]\n}`;
     
     try {
         const result = await model.generateContent(prompt);
         const jsonString = result.response.text();
-        // Clean the string to ensure it's valid JSON
         const cleanedJsonString = jsonString.replace(/```json/g, '').replace(/```/g, '').trim();
         return JSON.parse(cleanedJsonString);
     } catch (error) {
@@ -107,8 +106,8 @@ app.post('/api/analyze', upload.array('files'), async (req, res) => {
     }
     const submission_id = submissionData.id;
 
-    // 2. Process each file in parallel
-    const processingPromises = files.map(async (file) => {
+    // 2. Process each file
+    for (const file of files) {
         let extracted_text = null;
         if (file.mimetype.startsWith('image/')) {
             extracted_text = await getTextFromImage(file.buffer, file.mimetype);
@@ -119,28 +118,43 @@ app.post('/api/analyze', upload.array('files'), async (req, res) => {
         if (extracted_text) {
             const analysis_result = await analyzeCvText(extracted_text);
             if (analysis_result) {
-                const cv_data_to_insert = {
-                    submission_id: submission_id,
-                    original_filename: file.originalname,
-                    ats_score: analysis_result.ATS || null,
-                    candidate_name: analysis_result.Name || null,
-                    candidate_email: analysis_result.Mail || null,
-                    candidate_phone: analysis_result.Phone || null,
-                    education: analysis_result.Edu || [],
-                    skills: analysis_result.SKILLS || [],
-                    experience: analysis_result.EXPERIENCE || [],
-                    full_text: extracted_text
-                };
-                
-                const { error: insertError } = await supabase.from('cv_results').insert([cv_data_to_insert]);
-                if (insertError) {
-                    console.error("Supabase insert error:", insertError);
+                // Insert main CV data
+                const { data: cvResultData, error: cvError } = await supabase
+                    .from('cv_results')
+                    .insert([{
+                        submission_id: submission_id,
+                        original_filename: file.originalname,
+                        ats_score: analysis_result.ATS || null,
+                        candidate_name: analysis_result.Name || null,
+                        candidate_email: analysis_result.Mail || null,
+                        candidate_phone: analysis_result.Phone || null,
+                        full_text: extracted_text
+                    }])
+                    .select()
+                    .single();
+
+                if (cvError || !cvResultData) {
+                    console.error("Error inserting CV result:", cvError);
+                    continue; // Skip to the next file if this one fails
+                }
+                const cv_result_id = cvResultData.id;
+
+                // Insert related details into separate tables
+                if (analysis_result.Edu && Array.isArray(analysis_result.Edu)) {
+                    const eduRecords = analysis_result.Edu.map(item => ({ cv_result_id, institution: item }));
+                    if(eduRecords.length > 0) await supabase.from('education_details').insert(eduRecords);
+                }
+                if (analysis_result.EXPERIENCE && Array.isArray(analysis_result.EXPERIENCE)) {
+                    const expRecords = analysis_result.EXPERIENCE.map(item => ({ cv_result_id, description: item }));
+                    if(expRecords.length > 0) await supabase.from('experience_details').insert(expRecords);
+                }
+                if (analysis_result.SKILLS && Array.isArray(analysis_result.SKILLS)) {
+                    const skillRecords = analysis_result.SKILLS.map(item => ({ cv_result_id, category: item[0], details: item[1] }));
+                    if(skillRecords.length > 0) await supabase.from('skill_details').insert(skillRecords);
                 }
             }
         }
-    });
-
-    await Promise.all(processingPromises);
+    }
 
     // 3. Send success response
     res.status(200).json({ status: 'success', message: 'Files processed successfully.' });
