@@ -1,6 +1,7 @@
-// server.js
-
+// Load environment variables from .env file
 require('dotenv').config();
+
+// Import necessary libraries
 const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
@@ -8,22 +9,30 @@ const pdf = require('pdf-parse');
 const { createClient } = require('@supabase/supabase-js');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
+// --- CONFIGURATION ---
 const PORT = process.env.PORT || 3000;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
+// Initialize clients
 const app = express();
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-app.use(cors());
-app.use(express.json());
-const upload = multer({ storage: multer.memoryStorage() });
+// --- CORS CONFIGURATION ---
+const corsOptions = {
+  origin: 'https://cv-dshf.vercel.app', // Your frontend URL
+  optionsSuccessStatus: 200
+};
+app.use(cors(corsOptions));
 
-// --- HELPER FUNCTIONS (getTextFromImage, getTextFromPdf, analyzeCvText) ---
-// These functions remain the same as the previous version.
+
+app.use(express.json());
+const upload = multer({ storage: multer.memoryStorage() }); // Store files in memory
+
+// --- HELPER FUNCTIONS ---
 async function getTextFromImage(buffer, mimeType) {
     try {
         const imagePart = { inlineData: { data: buffer.toString("base64"), mimeType } };
@@ -39,8 +48,30 @@ async function getTextFromPdf(buffer) {
     } catch (error) { console.error("PDF Parse Error:", error); return null; }
 }
 
-async function analyzeCvText(cvText) {
-    const prompt = `You are an HR expert. Based on the following CV text, provide a JSON object with the following structure. Do not include any text outside of the JSON object itself.\n\nCV Text:\n${cvText}\n\nJSON Structure:\n{\n  "ATS": "Calculate a percentage score here",\n  "Name": "Extract the full name",\n  "Phone": "Extract the phone number",\n  "Mail": "Extract the email",\n  "Edu": ["List educational degrees as an array of strings"],\n  "SKILLS": [["Skill Category 1", "Details as a string"], ["Skill Category 2", "Details as a string"]],\n  "EXPERIENCE": ["List key experiences or job titles as an array of strings"]\n}`;
+async function analyzeCvText(cvText, keywords) {
+    // --- MODIFIED PROMPT ---
+    // The prompt is now dynamic and smarter. It uses the user's keywords as job requirements.
+    const prompt = `You are an expert HR specialist. Your task is to analyze the provided CV text against the required job skills and qualifications.
+
+Job Requirements (Keywords): "${keywords}"
+
+CV Text:
+---
+${cvText}
+---
+
+Based on the CV text and the job requirements, provide a JSON object with the following structure. Do not include any text outside of the JSON object itself.
+
+JSON Structure:
+{
+  "ATS": "Calculate a percentage match score based on how well the CV meets the specified Job Requirements. The score should be a string like '85%'.",
+  "Name": "Extract the full name",
+  "Phone": "Extract the phone number",
+  "Mail": "Extract the email",
+  "Edu": ["List educational degrees as an array of strings"],
+  "SKILLS": [["Skill Category 1", "Details as a string"], ["Skill Category 2", "Details as a string"]],
+  "EXPERIENCE": ["List key experiences or job titles as an array of strings"]
+}`;
     try {
         const result = await model.generateContent(prompt);
         const jsonString = result.response.text();
@@ -69,8 +100,8 @@ app.post('/api/analyze', upload.array('files'), async (req, res) => {
     }
     const submission_id = submissionData.id;
 
-    // Process files in the background, don't make the user wait
-    processFiles(files, submission_id);
+    // Pass keywords to the background processing function
+    processFiles(files, submission_id, keywords);
 
     // Immediately respond with the submission ID
     res.status(200).json({ status: 'success', submissionId: submission_id });
@@ -90,15 +121,18 @@ app.get('/api/results/:id', async (req, res) => {
         return res.status(404).json({ status: 'error', message: 'Submission not found.' });
     }
     
-    // Re-structure data to match frontend expectations
+    if (submission.cv_results.length === 0) {
+        return res.status(202).json({ status: 'processing', message: 'Analysis is still in progress.' });
+    }
+
     const responseData = {
+        status: 'success',
         totalCVs: submission.cv_results.length,
         analysisKeywords: submission.keywords.split(',').map(k => k.trim()),
         results: submission.cv_results.map(cv => ({
             id: cv.id,
             fileName: cv.original_filename,
-            matchPercentage: parseInt(cv.ats_score, 10) || 0,
-            // You can add more details here if needed by the dashboard
+            matchPercentage: parseInt(cv.ats_score) || 0,
         }))
     };
 
@@ -107,7 +141,7 @@ app.get('/api/results/:id', async (req, res) => {
 
 
 // --- BACKGROUND PROCESSING FUNCTION ---
-async function processFiles(files, submission_id) {
+async function processFiles(files, submission_id, keywords) {
     for (const file of files) {
         let extracted_text = null;
         if (file.mimetype.startsWith('image/')) {
@@ -117,8 +151,14 @@ async function processFiles(files, submission_id) {
         }
 
         if (extracted_text) {
-            const analysis_result = await analyzeCvText(extracted_text);
+            // Pass keywords to the analysis function
+            const analysis_result = await analyzeCvText(extracted_text, keywords);
+            
             if (analysis_result) {
+                const score = parseInt(analysis_result.ATS) || 0;
+
+                // --- CONDITIONAL LOGIC ---
+                // First, always insert the main result for the dashboard
                 const { data: cvResultData, error: cvError } = await supabase
                     .from('cv_results')
                     .insert([{
@@ -132,21 +172,25 @@ async function processFiles(files, submission_id) {
                     }])
                     .select()
                     .single();
+                
+                if (cvError || !cvResultData) continue; // Skip if main insertion fails
 
-                if (cvError || !cvResultData) continue;
-                const cv_result_id = cvResultData.id;
+                // ONLY if the score is "Very Good" or "Excellent" (> 65), save the detailed data
+                if (score > 65) {
+                    const cv_result_id = cvResultData.id;
 
-                if (analysis_result.Edu && Array.isArray(analysis_result.Edu)) {
-                    const eduRecords = analysis_result.Edu.map(item => ({ cv_result_id, institution: item }));
-                    if(eduRecords.length > 0) await supabase.from('education_details').insert(eduRecords);
-                }
-                if (analysis_result.EXPERIENCE && Array.isArray(analysis_result.EXPERIENCE)) {
-                    const expRecords = analysis_result.EXPERIENCE.map(item => ({ cv_result_id, description: item }));
-                    if(expRecords.length > 0) await supabase.from('experience_details').insert(expRecords);
-                }
-                if (analysis_result.SKILLS && Array.isArray(analysis_result.SKILLS)) {
-                    const skillRecords = analysis_result.SKILLS.map(item => ({ cv_result_id, category: item[0], details: item[1] }));
-                    if(skillRecords.length > 0) await supabase.from('skill_details').insert(skillRecords);
+                    if (analysis_result.Edu && Array.isArray(analysis_result.Edu)) {
+                        const eduRecords = analysis_result.Edu.map(item => ({ cv_result_id, institution: item }));
+                        if(eduRecords.length > 0) await supabase.from('education_details').insert(eduRecords);
+                    }
+                    if (analysis_result.EXPERIENCE && Array.isArray(analysis_result.EXPERIENCE)) {
+                        const expRecords = analysis_result.EXPERIENCE.map(item => ({ cv_result_id, description: item }));
+                        if(expRecords.length > 0) await supabase.from('experience_details').insert(expRecords);
+                    }
+                    if (analysis_result.SKILLS && Array.isArray(analysis_result.SKILLS)) {
+                        const skillRecords = analysis_result.SKILLS.map(item => ({ cv_result_id, category: item[0], details: item[1] }));
+                        if(skillRecords.length > 0) await supabase.from('skill_details').insert(skillRecords);
+                    }
                 }
             }
         }
