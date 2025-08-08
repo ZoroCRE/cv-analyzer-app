@@ -1,4 +1,2 @@
-export const corsHeaders = {
-  'Access-Control-Allow-Origin': 'https://cv-dshf.vercel.app', // Your frontend URL
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+const supabaseClient = createClient(supabaseUrl, supabaseAnonKey, { global: { headers: { Authorization: req.headers.get('Authorization')! } } });
+console.log(`Requesting: ${supabaseUrl}/functions/v1/process-cv`);
