@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CV Analysis Tool</title>
+  <style>
+    /* --- General Styles --- */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 1.5rem;
+      background-color: #f4f7f9;
+      color: #333;
+      transition: background-color 0.3s ease, color 0.3s ease;
+    }
+
+    body.dark-mode {
+      background-color: #1a1a2e;
+      color: #e0e0e0;
+    }
+
+    /* --- Toggles for Dark Mode and Language --- */
+    .toggles {
+      position: fixed;
+      top: 1.5rem;
+      left: 1.5rem;
+      right: 1.5rem;
+      height: 28px; /* Set height for container */
+      z-index: 1000;
+    }
+
+    .mode-toggle {
+      position: absolute;
+      left: 0;
+      top: 0;
+    }
+
+    .lang-toggle {
+      position: absolute;
+      right: 0;
+      top: 0;
+    }
+
+    .mode-switch, .lang-switch {
+      position: relative;
+      width: 50px;
+      height: 28px;
+      background-color: #ccc;
+      border-radius: 14px;
+      cursor: pointer;
+      transition: background-color 0.3s ease;
+    }
+
+    .mode-switch.dark, .lang-switch.active {
+      background-color: #4a4a6a;
+    }
+
+    .mode-switch input, .lang-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .slider, .lang-slider {
+      position: absolute;
+      inset: 0;
+      border-radius: 14px;
+      transition: transform 0.3s ease;
+    }
+
+    .slider::before, .lang-slider::before {
+      content: "";
+      position: absolute;
+      height: 22px;
+      width: 22px;
+      left: 3px;
+      bottom: 3px;
+      background-color: #fff;
+      border-radius: 50%;
+      transition: transform 0.3s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.85rem;
+    }
+
+    .slider.light::before { content: "☀️"; }
+    .slider.dark::before { content: "🌙"; transform: translateX(22px); }
+    .lang-slider.ar::before { content: "ع"; color: #1e3a8a; }
+    .lang-slider.en::before { content: "E"; color: #1e3a8a; transform: translateX(22px); }
+
+    /* --- Main Container & Form --- */
+    .container {
+      width: 100%;
+      max-width: 700px;
+      margin: 5rem auto 1.5rem;
+      padding: 2rem;
+      background-color: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+      transition: background-color 0.3s ease;
+      z-index: 1;
+    }
+
+    .dark-mode .container {
+      background-color: #162447;
+    }
+
+    h1 {
+      font-size: 2rem;
+      text-align: center;
+      margin-bottom: 1.5rem;
+      color: #1e3a8a;
+    }
+    .dark-mode h1 {
+        color: #90a4d4;
+    }
+
+    .form-group {
+      margin-bottom: 1.5rem;
+    }
+
+    label {
+      display: block;
+      font-size: 1.1rem;
+      margin-bottom: 0.5rem;
+      font-weight: 600;
+    }
+
+    /* --- Upload Box --- */
+    .upload-box {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      min-height: 150px;
+      border: 2px dashed #a0b4c8;
+      border-radius: 8px;
+      background-color: #f8fafc;
+      text-align: center;
+      padding: 1rem;
+      cursor: pointer;
+      transition: border-color 0.3s ease, background-color 0.3s ease;
+    }
+
+    .dark-mode .upload-box {
+      border-color: #4a5a7a;
+      background-color: #1f2a51;
+    }
+
+    .upload-box.dragover {
+      border-color: #007bff;
+      background-color: #e6f0fa;
+    }
+
+    .upload-box img {
+      width: 40px;
+      margin-bottom: 0.5rem;
+      filter: grayscale(50%) opacity(70%);
+    }
+
+    .upload-box p {
+      font-size: 0.9rem;
+      color: #666;
+    }
+    .dark-mode .upload-box p {
+      color: #bbb;
+    }
+
+    .upload-box input[type="file"] {
+      display: none;
+    }
+
+    /* --- File List Display --- */
+    #file-list-container {
+        margin-top: 1rem;
+    }
+    #file-list {
+        list-style: none;
+        padding: 0;
+    }
+    #file-list li {
+        background-color: #e9ecef;
+        padding: 0.5rem 1rem;
+        border-radius: 5px;
+        margin-bottom: 0.5rem;
+        font-size: 0.9rem;
+        color: #495057;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .dark-mode #file-list li {
+        background-color: #2c3e50;
+        color: #ecf0f1;
+    }
+
+    /* --- Inputs and Buttons --- */
+    input[type="text"] {
+      width: 100%;
+      padding: 0.75rem;
+      font-size: 1rem;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    }
+    input[type="text"]:focus {
+        border-color: #007bff;
+        box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.25);
+        outline: none;
+    }
+
+    .dark-mode input[type="text"] {
+      background-color: #2a3b5c;
+      border-color: #5a6a8a;
+      color: #e0e0e0;
+    }
+
+    button[type="submit"], .upload-btn {
+      width: 100%;
+      padding: 0.8rem;
+      font-size: 1.1rem;
+      font-weight: bold;
+      background-color: #007bff;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background-color 0.3s ease, transform 0.2s ease;
+    }
+    button[type="submit"]:hover, .upload-btn:hover {
+      background-color: #0056b3;
+      transform: translateY(-2px);
+    }
+
+    .dark-mode button[type="submit"] {
+      background-color: #1a73e8;
+    }
+    .dark-mode button[type="submit"]:hover {
+      background-color: #135ab6;
+    }
+
+    /* --- Message/Notification Styles --- */
+    #message-container {
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 2000;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+    }
+
+    .message {
+        padding: 0.8rem 1.5rem;
+        margin-bottom: 1rem;
+        border-radius: 6px;
+        color: #fff;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        opacity: 0;
+        transform: translateY(20px);
+        transition: opacity 0.4s ease, transform 0.4s ease;
+        font-weight: 500;
+    }
+
+    .message.show {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    .message-success {
+        background-color: #28a745;
+    }
+
+    .message-error {
+        background-color: #dc3545;
+    }
+
+
+    /* --- Responsive Design --- */
+    @media (max-width: 768px) {
+      body { padding: 1rem; }
+      .container { margin-top: 6rem; padding: 1.5rem; }
+      h1 { font-size: 1.8rem; }
+    }
+  </style>
+</head>
+<body class="dark-mode">
+  <div class="toggles">
+    <div class="lang-toggle">
+      <label class="lang-switch active">
+        <input type="checkbox" id="lang" onchange="toggleLang()">
+        <span class="lang-slider en"></span>
+      </label>
+    </div>
+    <div class="mode-toggle">
+      <label class="mode-switch dark">
+        <input type="checkbox" id="mode" onchange="toggleMode()" checked>
+        <span class="slider dark"></span>
+      </label>
+    </div>
+  </div>
+
+  <div class="container">
+    <h1 id="title">CV Analysis Tool</h1>
+    <form id="cv-form">
+      <div class="form-group">
+        <label for="keywords" id="keywords-label">Enter Keywords</label>
+        <input type="text" id="keywords" name="keywords" placeholder="e.g., Python, Data Analysis, Project Management">
+      </div>
+
+      <div class="form-group">
+        <label for="cv-upload" id="upload-label">Upload CVs</label>
+        <div class="upload-box" id="upload-box">
+          <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23007bff'><path d='M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z'/></svg>" alt="Upload">
+          <p id="upload-text">Drag & drop files here or click to select</p>
+          <input type="file" id="cv-upload" name="files" accept=".pdf,.doc,.docx,.jpg,.png" multiple>
+        </div>
+        <div id="file-list-container">
+            <ul id="file-list"></ul>
+        </div>
+      </div>
+
+      <button type="submit" id="submit-btn">Analyze and Submit</button>
+    </form>
+  </div>
+
+  <div id="message-container"></div>
+
+  <script>
+    // --- Global State ---
+    let isArabic = false; // Default to English
+    // IMPORTANT: Replace this with your actual Vercel deployment URL after deploying
+    const API_ENDPOINT = 'http://localhost:3000/api/analyze'; // For local testing
+
+    // --- DOM Elements ---
+    const body = document.body;
+    const form = document.getElementById('cv-form');
+    const uploadBox = document.getElementById('upload-box');
+    const fileInput = document.getElementById('cv-upload');
+    const fileList = document.getElementById('file-list');
+    const messageContainer = document.getElementById('message-container');
+
+    // --- UI Functions ---
+    function showMessage(text, type = 'success') {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `message message-${type}`;
+        messageDiv.textContent = text;
+
+        messageContainer.appendChild(messageDiv);
+
+        setTimeout(() => {
+            messageDiv.classList.add('show');
+        }, 10);
+
+        setTimeout(() => {
+            messageDiv.classList.remove('show');
+            messageDiv.addEventListener('transitionend', () => {
+                messageDiv.remove();
+            });
+        }, 4000);
+    }
+
+    function toggleMode() {
+      const slider = document.querySelector('.slider');
+      const modeSwitch = document.querySelector('.mode-switch');
+      body.classList.toggle('dark-mode');
+      slider.classList.toggle('light');
+      slider.classList.toggle('dark');
+      modeSwitch.classList.toggle('dark');
+    }
+
+    function toggleLang() {
+      const langSlider = document.querySelector('.lang-slider');
+      const langSwitch = document.querySelector('.lang-switch');
+      isArabic = !isArabic;
+      langSlider.classList.toggle('en');
+      langSlider.classList.toggle('ar');
+      langSwitch.classList.toggle('active');
+
+      document.documentElement.lang = isArabic ? 'ar' : 'en';
+      document.documentElement.dir = isArabic ? 'rtl' : 'ltr';
+
+      updateUIText();
+    }
+
+    function updateUIText() {
+        const texts = {
+            title: { ar: 'أداة تحليل السيرة الذاتية', en: 'CV Analysis Tool' },
+            keywordsLabel: { ar: 'أدخل الكلمات المفتاحية', en: 'Enter Keywords' },
+            keywordsPlaceholder: { ar: 'مثال: بايثون، تحليل البيانات', en: 'e.g., Python, Data Analysis' },
+            uploadLabel: { ar: 'رفع السير الذاتية', en: 'Upload CVs' },
+            uploadText: { ar: 'اسحب وأفلت الملفات هنا أو انقر للاختيار', en: 'Drag & drop files here or click to select' },
+            submitBtn: { ar: 'تحليل وإرسال', en: 'Analyze and Submit' },
+        };
+
+        const langKey = isArabic ? 'ar' : 'en';
+        document.getElementById('title').textContent = texts.title[langKey];
+        document.getElementById('keywords-label').textContent = texts.keywordsLabel[langKey];
+        document.getElementById('keywords').placeholder = texts.keywordsPlaceholder[langKey];
+        document.getElementById('upload-label').textContent = texts.uploadLabel[langKey];
+        document.getElementById('upload-text').textContent = texts.uploadText[langKey];
+        document.getElementById('submit-btn').textContent = texts.submitBtn[langKey];
+    }
+
+    function displaySelectedFiles() {
+        fileList.innerHTML = '';
+        if (fileInput.files.length > 0) {
+            for (const file of fileInput.files) {
+                const listItem = document.createElement('li');
+                listItem.textContent = `${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+                fileList.appendChild(listItem);
+            }
+        }
+    }
+
+    // --- Event Listeners ---
+    uploadBox.addEventListener('click', () => fileInput.click());
+    uploadBox.addEventListener('dragover', (e) => { e.preventDefault(); uploadBox.classList.add('dragover'); });
+    uploadBox.addEventListener('dragleave', () => { uploadBox.classList.remove('dragover'); });
+    uploadBox.addEventListener('drop', (e) => {
+      e.preventDefault();
+      uploadBox.classList.remove('dragover');
+      fileInput.files = e.dataTransfer.files;
+      displaySelectedFiles();
+    });
+    fileInput.addEventListener('change', displaySelectedFiles);
+
+    form.addEventListener('submit', function(event) {
+      event.preventDefault();
+
+      const keywords = document.getElementById('keywords').value;
+      const files = fileInput.files;
+
+      if (files.length === 0) {
+        const errorMsg = isArabic ? 'الرجاء اختيار ملف واحد على الأقل.' : 'Please select at least one file.';
+        showMessage(errorMsg, 'error');
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('keywords', keywords);
+
+      for (let i = 0; i < files.length; i++) {
+        formData.append('files', files[i]);
+      }
+
+      const submitButton = document.getElementById('submit-btn');
+      const originalButtonText = submitButton.textContent;
+      submitButton.textContent = isArabic ? 'جاري التحليل...' : 'Analyzing...';
+      submitButton.disabled = true;
+
+      fetch(API_ENDPOINT, {
+        method: 'POST',
+        body: formData
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.status === 'success') {
+          const successMsg = isArabic ? 'تم تحليل الملفات بنجاح!' : 'Files analyzed successfully!';
+          showMessage(successMsg, 'success');
+          form.reset();
+          fileList.innerHTML = '';
+        } else {
+          const failMsg = data.message || (isArabic ? 'فشل التحليل.' : 'Analysis failed.');
+          showMessage(failMsg, 'error');
+          console.error('Analysis failed:', data.message, data.details);
+        }
+      })
+      .catch(error => {
+        console.error('Error during submission:', error);
+        const networkMsg = isArabic ? 'حدث خطأ في الاتصال بالخادم.' : 'An error occurred connecting to the server.';
+        showMessage(networkMsg, 'error');
+      })
+      .finally(() => {
+        submitButton.textContent = originalButtonText;
+        submitButton.disabled = false;
+      });
+    });
+
+    document.addEventListener('DOMContentLoaded', () => {
+        const langSwitch = document.querySelector('.lang-switch');
+        const langInput = document.getElementById('lang');
+        if (!isArabic) {
+            langSwitch.classList.add('active');
+            langInput.checked = true;
+        }
+    });
+  </script>
+</body>
+</html>
