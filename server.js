@@ -1,7 +1,6 @@
-// Load environment variables from .env file
-require('dotenv').config();
+// server.js
 
-// Import necessary libraries
+require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
@@ -9,91 +8,56 @@ const pdf = require('pdf-parse');
 const { createClient } = require('@supabase/supabase-js');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-// --- CONFIGURATION ---
 const PORT = process.env.PORT || 3000;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
-// Initialize clients
 const app = express();
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-// Setup middleware
-app.use(cors()); // Enable Cross-Origin Resource Sharing
+app.use(cors());
 app.use(express.json());
-const upload = multer({ storage: multer.memoryStorage() }); // Store files in memory
+const upload = multer({ storage: multer.memoryStorage() });
 
-// --- HELPER FUNCTIONS ---
-
-/**
- * Extracts text from an image buffer using Gemini API (OCR).
- * @param {Buffer} buffer The image file buffer.
- * @param {string} mimeType The MIME type of the image.
- * @returns {Promise<string|null>} The extracted text or null on failure.
- */
+// --- HELPER FUNCTIONS (getTextFromImage, getTextFromPdf, analyzeCvText) ---
+// These functions remain the same as the previous version.
 async function getTextFromImage(buffer, mimeType) {
     try {
-        const imagePart = {
-            inlineData: {
-                data: buffer.toString("base64"),
-                mimeType,
-            },
-        };
+        const imagePart = { inlineData: { data: buffer.toString("base64"), mimeType } };
         const result = await model.generateContent(["Extract all text from this document.", imagePart]);
         return result.response.text();
-    } catch (error) {
-        console.error("Gemini OCR Error:", error);
-        return null;
-    }
+    } catch (error) { console.error("Gemini OCR Error:", error); return null; }
 }
 
-/**
- * Extracts text from a PDF buffer.
- * @param {Buffer} buffer The PDF file buffer.
- * @returns {Promise<string|null>} The extracted text or null on failure.
- */
 async function getTextFromPdf(buffer) {
     try {
         const data = await pdf(buffer);
         return data.text;
-    } catch (error) {
-        console.error("PDF Parse Error:", error);
-        return null;
-    }
+    } catch (error) { console.error("PDF Parse Error:", error); return null; }
 }
 
-/**
- * Analyzes the extracted text using Gemini to get structured data.
- * @param {string} cvText The full text from the CV.
- * @returns {Promise<object|null>} The structured data or null on failure.
- */
 async function analyzeCvText(cvText) {
     const prompt = `You are an HR expert. Based on the following CV text, provide a JSON object with the following structure. Do not include any text outside of the JSON object itself.\n\nCV Text:\n${cvText}\n\nJSON Structure:\n{\n  "ATS": "Calculate a percentage score here",\n  "Name": "Extract the full name",\n  "Phone": "Extract the phone number",\n  "Mail": "Extract the email",\n  "Edu": ["List educational degrees as an array of strings"],\n  "SKILLS": [["Skill Category 1", "Details as a string"], ["Skill Category 2", "Details as a string"]],\n  "EXPERIENCE": ["List key experiences or job titles as an array of strings"]\n}`;
-    
     try {
         const result = await model.generateContent(prompt);
         const jsonString = result.response.text();
         const cleanedJsonString = jsonString.replace(/```json/g, '').replace(/```/g, '').trim();
         return JSON.parse(cleanedJsonString);
-    } catch (error) {
-        console.error("Gemini Analysis Error:", error);
-        return null;
-    }
+    } catch (error) { console.error("Gemini Analysis Error:", error); return null; }
 }
 
-// --- API ROUTE ---
+
+// --- API ROUTES ---
+
+// POST /api/analyze: Receives files and starts analysis
 app.post('/api/analyze', upload.array('files'), async (req, res) => {
     const { keywords } = req.body;
     const files = req.files;
+    if (!files || files.length === 0) return res.status(400).json({ status: 'error', message: 'No files were uploaded.' });
 
-    if (!files || files.length === 0) {
-        return res.status(400).json({ status: 'error', message: 'No files were uploaded.' });
-    }
-
-    // 1. Create a submission record in Supabase
     const { data: submissionData, error: submissionError } = await supabase
         .from('submissions')
         .insert([{ keywords: keywords }])
@@ -101,12 +65,49 @@ app.post('/api/analyze', upload.array('files'), async (req, res) => {
         .single();
 
     if (submissionError || !submissionData) {
-        console.error("Supabase submission error:", submissionError);
         return res.status(500).json({ status: 'error', message: 'Failed to create submission record.', details: submissionError });
     }
     const submission_id = submissionData.id;
 
-    // 2. Process each file
+    // Process files in the background, don't make the user wait
+    processFiles(files, submission_id);
+
+    // Immediately respond with the submission ID
+    res.status(200).json({ status: 'success', submissionId: submission_id });
+});
+
+// GET /api/results/:id: Fetches the results for a specific submission
+app.get('/api/results/:id', async (req, res) => {
+    const { id } = req.params;
+
+    const { data: submission, error: submissionError } = await supabase
+        .from('submissions')
+        .select('keywords, cv_results(*, skill_details(*), experience_details(*), education_details(*))')
+        .eq('id', id)
+        .single();
+
+    if (submissionError || !submission) {
+        return res.status(404).json({ status: 'error', message: 'Submission not found.' });
+    }
+    
+    // Re-structure data to match frontend expectations
+    const responseData = {
+        totalCVs: submission.cv_results.length,
+        analysisKeywords: submission.keywords.split(',').map(k => k.trim()),
+        results: submission.cv_results.map(cv => ({
+            id: cv.id,
+            fileName: cv.original_filename,
+            matchPercentage: parseInt(cv.ats_score, 10) || 0,
+            // You can add more details here if needed by the dashboard
+        }))
+    };
+
+    res.status(200).json(responseData);
+});
+
+
+// --- BACKGROUND PROCESSING FUNCTION ---
+async function processFiles(files, submission_id) {
     for (const file of files) {
         let extracted_text = null;
         if (file.mimetype.startsWith('image/')) {
@@ -118,7 +119,6 @@ app.post('/api/analyze', upload.array('files'), async (req, res) => {
         if (extracted_text) {
             const analysis_result = await analyzeCvText(extracted_text);
             if (analysis_result) {
-                // Insert main CV data
                 const { data: cvResultData, error: cvError } = await supabase
                     .from('cv_results')
                     .insert([{
@@ -133,13 +133,9 @@ app.post('/api/analyze', upload.array('files'), async (req, res) => {
                     .select()
                     .single();
 
-                if (cvError || !cvResultData) {
-                    console.error("Error inserting CV result:", cvError);
-                    continue; // Skip to the next file if this one fails
-                }
+                if (cvError || !cvResultData) continue;
                 const cv_result_id = cvResultData.id;
 
-                // Insert related details into separate tables
                 if (analysis_result.Edu && Array.isArray(analysis_result.Edu)) {
                     const eduRecords = analysis_result.Edu.map(item => ({ cv_result_id, institution: item }));
                     if(eduRecords.length > 0) await supabase.from('education_details').insert(eduRecords);
@@ -155,12 +151,6 @@ app.post('/api/analyze', upload.array('files'), async (req, res) => {
             }
         }
     }
+}
 
-    // 3. Send success response
-    res.status(200).json({ status: 'success', message: 'Files processed successfully.' });
-});
-
-// Start the server
-app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
